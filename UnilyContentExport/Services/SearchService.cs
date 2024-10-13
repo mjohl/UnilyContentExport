@@ -3,6 +3,7 @@ using Serilog;
 using System.Text.Json;
 using System.Text;
 using UnilyContentExport.Models;
+using System.Net;
 
 public static class SearchService
 {
@@ -23,6 +24,22 @@ public static class SearchService
         };
     }
 
+    private static async Task<HttpResponseMessage> RetryPolicy(Func<Task<HttpResponseMessage>> operation, int retryCount = 1)
+    {
+        HttpResponseMessage response = await operation();
+
+        int delayMinutes = 1;
+        for (int retry = 0; retry < retryCount &&
+            (response.StatusCode == HttpStatusCode.NotFound || response.StatusCode == HttpStatusCode.TooManyRequests); retry++)
+        {
+            await Task.Delay(TimeSpan.FromMinutes(delayMinutes));
+            delayMinutes *= 2;
+            response = await operation();
+        }
+
+        return response;
+    }
+
     public static async Task<Dictionary<long, string>> GetNodeTitlesByIds(Uri graphqlEndpoint, List<long> nodeIds)
     {
         if (_httpClient == null)
@@ -33,8 +50,8 @@ public static class SearchService
         string nodeIdsQuery = string.Join(" ", nodeIds.Select(id => $"id:{id}"));
         string query = $@"query GetNodeTitles {{ content {{ byQueryText(queryText: ""{nodeIdsQuery}"") {{ data {{ id nodeName }} }} }} }}";
 
-        var response = await _httpClient.PostAsync(graphqlEndpoint, new StringContent(
-            JsonSerializer.Serialize(new { query }), Encoding.UTF8, "application/json"));
+        var response = await RetryPolicy(() => _httpClient.PostAsync(graphqlEndpoint, new StringContent(
+            JsonSerializer.Serialize(new { query }), Encoding.UTF8, "application/json")), 2);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -57,7 +74,6 @@ public static class SearchService
         return nodeTitles;
     }
 
-
     public static async Task<List<DataItem>?> GetContentItems(Uri graphqlEndpoint, string query)
     {
         if (_httpClient == null)
@@ -65,8 +81,8 @@ public static class SearchService
             throw new InvalidOperationException("HttpClient is not initialized.");
         }
 
-        var response = await _httpClient.PostAsync(graphqlEndpoint, new StringContent(
-            JsonSerializer.Serialize(new { query }), Encoding.UTF8, "application/json"));
+        var response = await RetryPolicy(() => _httpClient.PostAsync(graphqlEndpoint, new StringContent(
+            JsonSerializer.Serialize(new { query }), Encoding.UTF8, "application/json")), 2);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -101,6 +117,7 @@ public static class SearchService
 
         return contentItems;
     }
+
 
     private static Dictionary<string, object> ParseDynamicProperties(JsonElement properties)
     {
@@ -151,7 +168,7 @@ public static class SearchService
 
         try
         {
-            var response = await _httpClient.GetAsync(fileUrl);
+            var response = await RetryPolicy(() => _httpClient.GetAsync(fileUrl), 2);
 
             if (response.IsSuccessStatusCode)
             {
@@ -169,4 +186,5 @@ public static class SearchService
             _logger?.Error(ex, "Error occurred while downloading file from {FileUrl}", fileUrl);
         }
     }
+
 }

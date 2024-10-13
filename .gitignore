@@ -362,3 +362,5 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /UnilyContentExport/appsettings.local.json
+/UnilyContentExport/appsettings.local.json
+/UnilyContentExport/appsettings.local.json

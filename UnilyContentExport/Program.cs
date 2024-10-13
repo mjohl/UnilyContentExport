@@ -6,33 +6,28 @@ using System.Text.Json;
 
 SemaphoreSlim mediaSemaphore = new SemaphoreSlim(1, 1);
 
+
+Uri graphqlEndpoint;
+string exportBasePath, exportMediaPath;
+int batchSize, maxParallelTasks, upperLimitId;
+Dictionary<long, string> nodeNameCache, mediaCache;
+using var httpClient = new HttpClient();
+
 var config = new ConfigurationBuilder()
 .SetBasePath(Directory.GetCurrentDirectory())
 .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
 .AddJsonFile("appsettings.local.json", optional: false, reloadOnChange: true)
 .Build();
 
-var baseUri = new Uri(config["Unily:ApiSiteUrl"] ?? throw new ArgumentNullException("API Site URL cannot be null"));
-var graphqlEndpoint = new Uri(baseUri, config["GraphQl:Endpoint"] ?? throw new ArgumentNullException("GraphQL endpoint cannot be null"));
-
-var exportBasePath = config["GraphQl:ExportPath"] ?? throw new ArgumentNullException("Export path cannot be null");
-var exportMediaPath = config["GraphQl:ExportMediaPath"] ?? throw new ArgumentNullException("Export media path cannot be null");
-int batchSize = int.Parse(config["GraphQl:BatchSize"] ?? "1000");
-int maxParallelTasks = int.Parse(config["GraphQl:ParallelTasks"] ?? "3"); ;
-int upperLimitId = int.Parse(config["GraphQl:UpperLimitId"] ?? "99999999");
-var nodeNameCache = new Dictionary<long, string> { { -1, "Root" } };
-var mediaCache = new Dictionary<long, string>();
+SetConfigurations(config, out graphqlEndpoint, out exportBasePath, out exportMediaPath, out batchSize, out maxParallelTasks, out upperLimitId, out nodeNameCache, out mediaCache);
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Debug()
-    .WriteTo.File($"{exportBasePath}\\..\\log_"+ DateTime.Now.ToString("yyyyMMddHHmm") +".txt", rollingInterval: RollingInterval.Day)
+    .WriteTo.File($"{exportBasePath}\\..\\log_" + DateTime.Now.ToString("yyyyMMddHHmm") + ".txt", rollingInterval: RollingInterval.Day)
     .WriteTo.Async(x => x.Console(theme: Serilog.Sinks.SystemConsole.Themes.AnsiConsoleTheme.Sixteen))
     .CreateLogger();
 
-using var httpClient = new HttpClient();
-var authService = new AuthService(httpClient, config);
-string accessToken = await authService.GetAccessTokenAsync();
-httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
+await SetAuthToken(httpClient, config);
 
 SearchService.InitSearchService(Log.Logger, config, httpClient);
 IOHelper.InitIOHelper(Log.Logger);
@@ -96,7 +91,7 @@ async Task ProcessDataItem(DataItem dataItem, string nodeTypeAlias, Dictionary<l
     pathNames = pathNames.Select(IOHelper.SanitizePathName).ToArray();
 
     string folderPath = Path.Combine(exportBasePath, nodeTypeAlias, string.Join("\\", pathNames));
-    folderPath = IOHelper.SanitizePathName(folderPath); 
+    folderPath = IOHelper.SanitizePathName(folderPath);
 
     IOHelper.CreateDirectoryIfNotExists(folderPath);
 
@@ -112,15 +107,13 @@ async Task ProcessDataItem(DataItem dataItem, string nodeTypeAlias, Dictionary<l
 async Task WriteContentToFile(DataItem dataItem, string folderPath)
 {
     string sanitizedNodeName = IOHelper.SanitizeFileName(dataItem.NodeName);
-    string truncatedNodeName = IOHelper.TruncateFileName(sanitizedNodeName, 50); // Adjust 50 as needed
+    string truncatedNodeName = IOHelper.TruncateFileName(sanitizedNodeName, 50);
     string contentFilePath = Path.Combine(folderPath, $"{dataItem.Id}_{truncatedNodeName}.json");
 
     IOHelper.CreateDirectoryIfNotExists(folderPath);
-    
+
     await File.WriteAllTextAsync(contentFilePath, JsonSerializer.Serialize(dataItem));
 }
-
-
 
 async Task<string[]> FetchPathNames(DataItem dataItem, Dictionary<long, string> nodeNameCache, Uri graphqlEndpoint)
 {
@@ -245,4 +238,23 @@ void UpdateMediaReference(Dictionary<string, object> properties, string mediaUrl
     }
 }
 
+static void SetConfigurations(IConfigurationRoot config, out Uri graphqlEndpoint, out string exportBasePath, out string exportMediaPath, out int batchSize, out int maxParallelTasks, out int upperLimitId, out Dictionary<long, string> nodeNameCache, out Dictionary<long, string> mediaCache)
+{
+    var baseUri = new Uri(config["Unily:ApiSiteUrl"] ?? throw new ArgumentNullException("API Site URL cannot be null"));
+    graphqlEndpoint = new Uri(baseUri, config["GraphQl:Endpoint"] ?? throw new ArgumentNullException("GraphQL endpoint cannot be null"));
+    exportBasePath = config["GraphQl:ExportPath"] ?? throw new ArgumentNullException("Export path cannot be null");
+    exportMediaPath = config["GraphQl:ExportMediaPath"] ?? throw new ArgumentNullException("Export media path cannot be null");
+    batchSize = int.Parse(config["GraphQl:BatchSize"] ?? "1000");
+    maxParallelTasks = int.Parse(config["GraphQl:ParallelTasks"] ?? "3");
+    ;
+    upperLimitId = int.Parse(config["GraphQl:UpperLimitId"] ?? "99999999");
+    nodeNameCache = new Dictionary<long, string> { { -1, "Root" } };
+    mediaCache = new Dictionary<long, string>();
+}
 
+static async Task SetAuthToken(HttpClient httpClient, IConfigurationRoot config)
+{
+    var authService = new AuthService(httpClient, config);
+    string accessToken = await authService.GetAccessTokenAsync();
+    httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
+}
